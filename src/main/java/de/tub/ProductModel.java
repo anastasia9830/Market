@@ -19,11 +19,14 @@ import java.util.List;
 public class ProductModel {
     private String id;            // Assigned by the exchange
     private String name;          // Assigned by the exchange
-    private String category;      // Assigned by the exchange
-    private int totalQuantity;    // Managed by the exchange
+    private String category;  // Assigned by the exchange
+    @Builder.Default     
+    private int totalQuantity = 0;    // Managed by the exchange
 
-    private List<ProductOffer> offers; // Submitted by sellers (price + quantity)
+    @Builder.Default
+    private List<ProductOffer> offers = new ArrayList<>(); // Submitted by sellers (price + quantity)
 
+    @Builder.Default
     private List<Double> priceHistory = new ArrayList<>(); // 💡 stores last 3 prices
 
     /**

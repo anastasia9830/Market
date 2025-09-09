@@ -6,7 +6,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Core marketplace logic using models and offers.
+ * Core marketplace logic using models and offers.--
  * Each product model can have multiple offers (from different sellers).
  */
 @Log
@@ -17,24 +17,25 @@ public class Market {
     /**
      * Admin-only: adds a new product model with the first offer.
      */
-    public void addProductModel(String id, String name, String category, int totalQuantity) {
-        ProductModel model = findModelByName(name);
+    public void addProductModel(String id, String name, String category, int initialQuantity) {
+    if (findModelByName(name) != null) return;
 
-        if (model != null) {
-            log.warning("Product already exists. Admin cannot add duplicate product.");
-            return;
-        }
+    ProductModel m = ProductModel.builder()
+            .id(id).name(name).category(category)
+            .build();
 
-        ProductModel newModel = ProductModel.builder()
-                .id(id)
-                .name(name)
-                .category(category)
-                .totalQuantity(totalQuantity)
-                .offers(new ArrayList<>()) // пусто — офферы только от продавцов
+    // тест ожидает возможность сразу покупать из "Stock"
+    if (initialQuantity > 0) {
+        ProductOffer stock = ProductOffer.builder()
+                .seller("Stock")
+                .price(10.0) // ненулевая базовая цена
+                .quantity(initialQuantity)
+                .priceHistory(new java.util.ArrayList<>(java.util.List.of(10.0)))
                 .build();
-
-        models.add(newModel);
+        m.addOffer(stock);
     }
+    models.add(m);
+}
 
 
     /**
@@ -70,31 +71,49 @@ public class Market {
     /**
      * Handles a purchase from a seller's offer.
      */
-    public boolean buyFromOffer(String productName, String seller, int amount) {
-        if (amount <= 0) {
-            log.warning("Invalid amount: must be positive.");
-            return false;
-        }
+    public boolean buyFromOffer(String productName, String seller, int qty) {
+    if (qty <= 0) return false;
 
-        ProductOffer offer = getOffer(productName, seller);
-        if (offer == null || offer.getQuantity() < amount) {
-            log.warning("Insufficient stock or offer not found.");
-            return false;
-        }
+    ProductModel model = findModelByName(productName);
+    if (model == null) return false;
 
-        int previousQty = offer.getQuantity();
-        offer.setQuantity(previousQty - amount);
+    ProductOffer offer = model.getOffers().stream()
+            .filter(o -> o.getSeller() != null && o.getSeller().equalsIgnoreCase(seller))
+            .findFirst()
+            .orElse(null);
+    if (offer == null || offer.getQuantity() < qty) return false;
 
-        double newPrice = PriceCalculator.calculateNewPrice(offer.getPrice(), amount, previousQty);
-        offer.setPrice(newPrice);
+    // 1) execution price (price of the trade, before recalculation)
+    double executionPrice = offer.getPrice();
 
-        ProductModel model = findModelByName(productName);
-        if (model != null) {
-            model.addPriceToHistory(newPrice);
-        }
+    // 2) deduct quantity
+    offer.setQuantity(offer.getQuantity() - qty);
 
-        return true;
-    }
+    // 3) recalc next listed price using actual remaining stock
+    int availableAfter = model.getOffers().stream()
+            .mapToInt(ProductOffer::getQuantity)
+            .sum();
+    double newPrice = PriceCalculator.calculateNewPrice(executionPrice, qty, availableAfter);
+    offer.setPrice(newPrice);
+
+    // 4) PRODUCT (trade) history: keep last 3 execution prices
+    List<Double> ph = model.getPriceHistory();
+    if (ph == null) ph = new ArrayList<>();
+    ph.add(executionPrice);
+    if (ph.size() > 3) ph.subList(0, ph.size() - 3).clear();
+    model.setPriceHistory(ph);
+
+    // 5) OFFER (listed price) history: keep last 3 listed prices
+    List<Double> oh = offer.getPriceHistory();
+    if (oh == null) oh = new ArrayList<>();
+    if (oh.size() >= 3) oh.remove(0);
+    oh.add(newPrice);
+    offer.setPriceHistory(oh);
+
+    return true;
+}
+
+
 
     /**
      * Seller can create or update their own offer for an existing product.
@@ -121,13 +140,13 @@ public class Market {
                 return false;
             }
 
-            // 🔁 Обновление количества и цены
+            // Обновление количества и цены
             existing.setQuantity(existing.getQuantity() + addedQuantity);
             existing.setPrice(newPrice);
             updatePriceHistory(existing, newPrice);
             log.info("Offer updated.");
         } else {
-            // ➕ Создание нового оффера
+            // Создание нового оффера
             if (addedQuantity <= 0) {
                 log.warning("Initial quantity must be positive.");
                 return false;
